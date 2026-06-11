@@ -14,6 +14,8 @@ This project analyzes the Olist Brazilian E-Commerce Public Dataset to identify 
 
 - `Olist_Analysis_Final.Rmd` is the final reproducible analysis report.
 - The report reads all CSV files from the same folder, builds the analytical table, creates visualizations, trains a logistic regression model, and performs seller segmentation.
+🔗 **Live report:** https://gaurigupta23.github.io/olist-customer-experience-prediction/Olist_Analysis_Final.html
+
 
 ## Data
 
@@ -40,5 +42,3 @@ install.packages(c(
 ## Validation
 
 The full report has been rendered successfully to `Olist_Analysis_Final.html`. The Rmd also includes a file-existence check so missing CSVs fail with a clear message before the analysis starts. 
-
-🔗 **Live report:** https://gaurigupta23.github.io/olist-customer-experience-prediction/Olist_Analysis_Final.html
