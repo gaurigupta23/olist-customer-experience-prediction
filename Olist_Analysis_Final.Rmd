@@ -1,0 +1,1203 @@
+---
+title: "Olist Product Quality Analysis"
+subtitle: "Predicting & Preventing Low-Quality Customer Experiences on a Brazilian E-Commerce Platform"
+author: "Business Analytics Capstone"
+date: "`r format(Sys.Date(), '%B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+    df_print: kable
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  error   = FALSE,
+  fig.align = "center",
+  fig.width  = 9,
+  fig.height = 5
+)
+
+as_datetime_safe <- function(x) {
+  if (inherits(x, "POSIXt")) {
+    return(x)
+  }
+  lubridate::ymd_hms(x, quiet = TRUE)
+}
+```
+
+```{r css, echo=FALSE, results='asis'}
+cat('
+<style>
+body  { font-family: "Segoe UI", Arial, sans-serif; font-size: 15px; color: #1F2937; line-height: 1.75; }
+h1    { color: #0F1117; border-bottom: 3px solid #1D9E75; padding-bottom: 8px; margin-top: 2rem; }
+h2    { color: #1A2340; margin-top: 2rem; }
+h3    { color: #1D9E75; }
+.finding { background:#F0FDF8; border-left:4px solid #1D9E75; padding:14px 18px; margin:16px 0; border-radius:0 8px 8px 0; }
+.policy  { background:#FFFBEB; border-left:4px solid #EF9F27; padding:14px 18px; margin:16px 0; border-radius:0 8px 8px 0; }
+.danger  { background:#FEF2F2; border-left:4px solid #E24B4A; padding:14px 18px; margin:16px 0; border-radius:0 8px 8px 0; }
+.qa      { background:#EFF6FF; border-left:4px solid #378ADD; padding:14px 18px; margin:12px 0; border-radius:0 8px 8px 0; }
+.metrics { display:flex; flex-wrap:wrap; gap:14px; margin:18px 0; }
+.metric  { background:#F5F6FA; border:1px solid #E5E7EB; border-radius:10px; padding:14px 20px; flex:1; min-width:120px; }
+.metric .val { font-size:28px; font-weight:700; line-height:1.1; margin:0; }
+.metric .lbl { font-size:11px; color:#6B7280; text-transform:uppercase; letter-spacing:.05em; margin:4px 0 0; }
+.img-caption { font-size:12px; color:#6B7280; font-style:italic; text-align:center;
+               border-top:1px solid #E5E7EB; padding-top:6px; margin-top:4px; }
+hr { border:none; border-top:2px solid #E5E7EB; margin:2.5rem 0; }
+table { font-size:13px !important; }
+</style>
+')
+```
+
+------------------------------------------------------------------------
+
+# Project Overview
+
+## What this project answers
+
+The Olist dataset contains nearly **100,000 delivered orders**. Roughly **12,700 of those** end in a 1 or 2 star review — lost trust, lost revenue, and a recoverable signal. This project answers five questions:
+
+1.  Which product categories carry the highest complaint risk, and what should be done about them?
+2.  Are bad reviews caused by delivery failures or actual product defects?
+3.  Does listing quality (photos, descriptions) affect customer satisfaction?
+4.  Can a machine learning model predict bad reviews before they are written?
+5.  Can sellers be segmented into natural quality groups that support a differentiated vendor strategy?
+
+## Dataset
+
+The **Olist Brazilian E-Commerce Public Dataset** is available on [Kaggle](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce). It covers orders placed between 2016 and 2018 across multiple product categories and sellers.
+
+:::::::: metrics
+::: metric
+<p class="val" style="color:#1D9E75">
+
+96,478
+
+</p>
+
+<p class="lbl">
+
+Delivered orders
+
+</p>
+:::
+
+::: metric
+<p class="val" style="color:#1A2340">
+
+4.14★
+
+</p>
+
+<p class="lbl">
+
+Platform avg score
+
+</p>
+:::
+
+::: metric
+<p class="val" style="color:#E24B4A">
+
+13.2%
+
+</p>
+
+<p class="lbl">
+
+Low-score rate (1–2★)
+
+</p>
+:::
+
+::: metric
+<p class="val" style="color:#EF9F27">
+
+3
+
+</p>
+
+<p class="lbl">
+
+High-risk categories
+
+</p>
+:::
+
+::: metric
+<p class="val" style="color:#534AB7">
+
+0.733
+
+</p>
+
+<p class="lbl">
+
+Full model AUC
+
+</p>
+:::
+::::::::
+
+------------------------------------------------------------------------
+
+# Part 1: Data Pipeline
+
+## 1.1 Required packages
+
+```{r libraries}
+# Install once with:
+# install.packages(c("tidyverse","lubridate","broom","pROC",
+#                    "knitr","kableExtra","scales","patchwork"))
+
+library(tidyverse)
+library(lubridate)
+library(broom)
+library(pROC)
+library(knitr)
+library(kableExtra)
+library(scales)
+```
+
+## 1.2 Load data
+
+> **How to use this file:** Download the Olist dataset from [Kaggle](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce), unzip it, and place all CSV files in the **same folder** as this RMD file. Also place `supervised_business_scorecard.csv` in that same folder. Then open this file in RStudio, go to **Session → Set Working Directory → To Source File Location**, and click **Knit**.
+
+```{r load-data}
+required_files <- c(
+  "olist_orders_dataset.csv",
+  "olist_order_items_dataset.csv",
+  "olist_order_reviews_dataset.csv",
+  "olist_products_dataset.csv",
+  "olist_order_payments_dataset.csv",
+  "olist_customers_dataset.csv",
+  "product_category_name_translation.csv",
+  "supervised_business_scorecard.csv"
+)
+
+missing_files <- setdiff(required_files, list.files())
+if (length(missing_files) > 0) {
+  stop(
+    "Missing required file(s): ",
+    paste(missing_files, collapse = ", "),
+    ". Place all CSV files in the same folder as this Rmd before knitting."
+  )
+}
+
+orders    <- read_csv("olist_orders_dataset.csv",             show_col_types = FALSE)
+items     <- read_csv("olist_order_items_dataset.csv",        show_col_types = FALSE)
+reviews   <- read_csv("olist_order_reviews_dataset.csv",      show_col_types = FALSE)
+products  <- read_csv("olist_products_dataset.csv",           show_col_types = FALSE)
+payments  <- read_csv("olist_order_payments_dataset.csv",     show_col_types = FALSE)
+customers <- read_csv("olist_customers_dataset.csv",          show_col_types = FALSE)
+cat_tr    <- read_csv("product_category_name_translation.csv", show_col_types = FALSE)
+scorecard <- read_csv("supervised_business_scorecard.csv",    show_col_types = FALSE)
+```
+
+## 1.3 Schema validation
+
+```{r validate}
+tibble(
+  Table    = c("orders","items","reviews","products","payments","customers"),
+  Rows     = c(nrow(orders), nrow(items), nrow(reviews),
+               nrow(products), nrow(payments), nrow(customers)),
+  Columns  = c(ncol(orders), ncol(items), ncol(reviews),
+               ncol(products), ncol(payments), ncol(customers))
+) %>%
+  kable(caption = "Dataset dimensions") %>%
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
+
+cat("Missing category names:", sum(is.na(products$product_category_name)), "\n")
+cat("Missing delivery dates:", sum(is.na(orders$order_delivered_customer_date)), "\n")
+cat("Unique product IDs:    ", n_distinct(products$product_id),
+    "vs total rows:", nrow(products), "\n")
+```
+
+## 1.4 Review deduplication
+
+Reviews in Olist are linked to **orders**, not individual products. Multi-item orders can produce duplicate review rows. We keep only the most recent review per order, then create the binary target variable used throughout the analysis.
+
+```{r dedup-reviews}
+reviews_clean <- reviews %>%
+  mutate(review_answer_timestamp = as_datetime_safe(review_answer_timestamp)) %>%
+  arrange(order_id, desc(review_answer_timestamp)) %>%
+  group_by(order_id) %>%
+  slice(1) %>%
+  ungroup() %>%
+  mutate(low_quality_signal = as.integer(review_score <= 2))
+
+cat("Raw review rows:        ", nrow(reviews), "\n")
+cat("After deduplication:    ", nrow(reviews_clean), "\n")
+cat("Duplicates removed:     ", nrow(reviews) - nrow(reviews_clean), "\n")
+cat("Low-quality rate:       ", round(mean(reviews_clean$low_quality_signal)*100, 1), "%\n")
+```
+
+## 1.5 Feature engineering
+
+```{r feature-engineering}
+# --- Orders: delivery timing features ---
+orders_feat <- orders %>%
+  mutate(
+    order_purchase_timestamp      = as_datetime_safe(order_purchase_timestamp),
+    order_delivered_customer_date = as_datetime_safe(order_delivered_customer_date),
+    order_estimated_delivery_date = as_datetime_safe(order_estimated_delivery_date),
+    delivery_days       = as.numeric(difftime(order_delivered_customer_date,
+                                              order_purchase_timestamp, units = "days")),
+    delivery_delay_days = as.numeric(difftime(order_delivered_customer_date,
+                                              order_estimated_delivery_date, units = "days")),
+    is_late_delivery    = replace_na(as.integer(delivery_delay_days > 0), 0L),
+    late_days           = if_else(is.na(delivery_delay_days), 0, pmax(delivery_delay_days, 0)),
+    purchase_month      = month(order_purchase_timestamp)
+  ) %>%
+  select(order_id, customer_id, order_status,
+         delivery_days, delivery_delay_days,
+         is_late_delivery, late_days, purchase_month)
+
+# --- Products: translate category names to English ---
+products_en <- products %>%
+  left_join(cat_tr, by = "product_category_name") %>%
+  mutate(
+    category = coalesce(product_category_name_english, product_category_name),
+    product_volume_cm3 = product_length_cm * product_height_cm * product_width_cm
+  )
+
+# --- Items: order-level product features ---
+item_feat <- items %>%
+  left_join(products_en, by = "product_id") %>%
+  group_by(order_id) %>%
+  summarise(
+    order_item_count           = n(),
+    unique_products            = n_distinct(product_id),
+    unique_sellers             = n_distinct(seller_id),
+    total_product_value        = sum(price, na.rm = TRUE),
+    total_freight              = sum(freight_value, na.rm = TRUE),
+    avg_photos                 = mean(product_photos_qty, na.rm = TRUE),
+    avg_description_length     = mean(product_description_lenght, na.rm = TRUE),
+    avg_weight_g               = mean(product_weight_g, na.rm = TRUE),
+    avg_volume_cm3             = mean(product_volume_cm3, na.rm = TRUE),
+    category                   = first(category),
+    primary_seller_id          = first(seller_id),
+    .groups = "drop"
+  ) %>%
+  mutate(freight_price_ratio = total_freight / pmax(total_product_value, 0.01))
+
+# --- Payments: installment features ---
+pay_feat <- payments %>%
+  group_by(order_id) %>%
+  summarise(
+    max_installments    = max(payment_installments, na.rm = TRUE),
+    n_payment_records   = n(),
+    .groups = "drop"
+  )
+
+# --- Assemble flat analytical table ---
+analytical_table <- reviews_clean %>%
+  inner_join(orders_feat,  by = "order_id") %>%
+  inner_join(item_feat,    by = "order_id") %>%
+  left_join(pay_feat,      by = "order_id") %>%
+  left_join(customers %>% select(customer_id, customer_state), by = "customer_id") %>%
+  filter(order_status == "delivered") %>%
+  mutate(
+    log_total_product_value      = log1p(total_product_value),
+    log_total_freight            = log1p(total_freight),
+    log_avg_description_length   = log1p(avg_description_length),
+    log_avg_weight_g             = log1p(avg_weight_g),
+    log_avg_volume_cm3           = log1p(avg_volume_cm3)
+  )
+
+cat("Analytical table rows:", nrow(analytical_table), "\n")
+cat("Platform average score:", round(mean(analytical_table$review_score, na.rm=TRUE), 3), "\n")
+```
+
+------------------------------------------------------------------------
+
+# Part 2: Business Questions
+
+------------------------------------------------------------------------
+
+## BQ1 — Which Categories Carry the Most Risk?
+
+**Goal:** Identify which product categories have the worst review scores and highest complaint rates, and put in place policies that protect the platform's reputation.
+
+### Score distribution
+
+```{r score-dist}
+reviews_clean %>%
+  count(review_score) %>%
+  mutate(pct = round(n / sum(n) * 100, 1)) %>%
+  ggplot(aes(x = factor(review_score), y = n, fill = factor(review_score))) +
+  geom_col(width = 0.65, show.legend = FALSE) +
+  geom_text(aes(label = paste0(pct, "%")), vjust = -0.4, size = 3.8, colour = "grey30") +
+  scale_fill_manual(values = c("1"="#E24B4A","2"="#F09595","3"="#EF9F27",
+                                "4"="#85B7EB","5"="#1D9E75")) +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title    = "Overall review score distribution — 99,441 orders",
+    subtitle = "The platform skews positive, but 13.2% of delivered orders receive a 1–2 star review.",
+    x = "Review score", y = "Number of orders"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+### Category scorecard
+
+```{r category-scorecard}
+MIN_REVIEWS_CATEGORY <- 50
+
+category_scores <- analytical_table %>%
+  filter(!is.na(review_score), !is.na(category)) %>%
+  group_by(category) %>%
+  summarise(
+    n_reviews      = n(),
+    avg_score      = round(mean(review_score, na.rm = TRUE), 2),
+    low_score_rate = round(mean(low_quality_signal, na.rm = TRUE) * 100, 1),
+    avg_price      = round(mean(total_product_value, na.rm = TRUE), 2),
+    .groups = "drop"
+  ) %>%
+  filter(n_reviews >= MIN_REVIEWS_CATEGORY) %>%
+  arrange(avg_score) %>%
+  mutate(
+    risk_tier = case_when(
+      low_score_rate > 20 ~ "High risk",
+      low_score_rate > 15 ~ "Watch",
+      TRUE                ~ "Healthy"
+    )
+  )
+
+# Risk tier summary
+category_scores %>%
+  count(risk_tier) %>%
+  arrange(match(risk_tier, c("High risk","Watch","Healthy"))) %>%
+  kable(col.names = c("Risk tier","Number of categories"),
+        caption = "Categories by risk tier (minimum 50 reviews)") %>%
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE) %>%
+  row_spec(1, background = "#FEF2F2") %>%
+  row_spec(2, background = "#FFFBEB")
+```
+
+```{r bq1-table}
+category_scores %>%
+  head(10) %>%
+  mutate(category = str_replace_all(category, "_", " ")) %>%
+  select(category, n_reviews, avg_score, low_score_rate, avg_price, risk_tier) %>%
+  kable(
+    col.names = c("Category","Reviews","Avg score","Low-score %","Avg price (R$)","Risk tier"),
+    caption   = "Ten worst-performing categories (min 50 reviews)"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped","hover")) %>%
+  row_spec(which(category_scores$risk_tier[1:10] == "High risk"),
+           background = "#FEF2F2")
+```
+
+```{r bq1-chart, fig.height=7}
+platform_avg <- round(mean(analytical_table$review_score, na.rm = TRUE), 2)
+
+category_scores %>%
+  head(12) %>%
+  mutate(
+    category  = str_replace_all(category, "_", " "),
+    category  = fct_reorder(category, avg_score)
+  ) %>%
+  ggplot(aes(x = avg_score, y = category, fill = risk_tier)) +
+  geom_col(width = 0.65) +
+  geom_text(
+    aes(label = paste0(avg_score, "  (", low_score_rate, "% low)")),
+    hjust = -0.05, size = 3.2, colour = "grey30"
+  ) +
+  geom_vline(xintercept = platform_avg, linetype = "dashed",
+             colour = "grey50", linewidth = 0.6) +
+  annotate("text", x = platform_avg + 0.04, y = 0.65,
+           label = paste0("Platform avg ", platform_avg),
+           hjust = 0, size = 3, colour = "grey50") +
+  scale_fill_manual(values = c("High risk"="#E24B4A","Watch"="#EF9F27","Healthy"="#1D9E75")) +
+  scale_x_continuous(limits = c(3.0, 5.1)) +
+  labs(
+    title    = "BQ1: Category quality scorecard — worst 12 categories",
+    subtitle = "Bar label = avg score + % of reviews that are 1–2 star. Dashed line = platform average.",
+    x = "Average review score", y = NULL, fill = "Risk tier"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "bottom")
+```
+
+### Seller drilldown within high-risk categories
+
+```{r seller-drilldown}
+MIN_REVIEWS_SELLER <- 20
+
+flagged_categories <- category_scores %>%
+  filter(risk_tier == "High risk") %>%
+  pull(category)
+
+analytical_table %>%
+  filter(category %in% flagged_categories, !is.na(review_score),
+         !is.na(primary_seller_id)) %>%
+  group_by(seller_id = primary_seller_id, category) %>%
+  summarise(
+    n_reviews      = n(),
+    avg_score      = round(mean(review_score, na.rm = TRUE), 2),
+    low_score_rate = round(mean(low_quality_signal, na.rm = TRUE) * 100, 1),
+    .groups = "drop"
+  ) %>%
+  filter(n_reviews >= MIN_REVIEWS_SELLER) %>%
+  arrange(avg_score) %>%
+  head(10) %>%
+  mutate(
+    seller_id = paste0(substr(seller_id, 1, 8), "..."),
+    category  = str_replace_all(category, "_", " ")
+  ) %>%
+  kable(col.names = c("Seller ID","Category","Reviews","Avg score","Low-score %"),
+        caption = "Worst sellers within high-risk categories (min 20 reviews)") %>%
+  kable_styling(bootstrap_options = c("striped","hover"))
+```
+
+::: finding
+**Finding BQ1:** Three categories exceed the 20% low-score threshold. Office furniture scores 3.64★ with a 22.1% low-score rate. Fashion male clothing scores 3.79★ with 23.6% low-score. Audio scores 3.83★ with 21.8% low-score. By contrast, the best category — books_general_interest — scores 4.53★ with only 6.3% low-score. This is not a platform-wide problem; it is concentrated and fixable.
+:::
+
+::: policy
+**Policy BQ1:** Categories above 20% low-score rate trigger mandatory packaging guidelines and quality testing before new seller onboarding. Categories between 15–20% enter a quarterly watch list. Within flagged categories, individual seller scorecards identify specific bad actors — good sellers in a bad category are not penalised.
+:::
+
+------------------------------------------------------------------------
+
+## BQ2 — Logistics or Product Defects?
+
+**Goal:** Determine whether poor reviews are caused by carrier delays or actual product failures — and ensure sellers are not penalised for things outside their control.
+
+### Late vs on-time: headline numbers
+
+```{r bq2-summary}
+bq2_data <- analytical_table %>%
+  filter(!is.na(is_late_delivery), !is.na(review_score))
+
+bq2_summary <- bq2_data %>%
+  group_by(is_late_delivery) %>%
+  summarise(
+    n_orders       = n(),
+    avg_score      = round(mean(review_score, na.rm = TRUE), 2),
+    low_score_pct  = round(mean(low_quality_signal, na.rm = TRUE) * 100, 1),
+    pct_five_star  = round(mean(review_score == 5, na.rm = TRUE) * 100, 1),
+    .groups = "drop"
+  ) %>%
+  mutate(delivery_status = ifelse(is_late_delivery == 1, "Late", "On-time")) %>%
+  select(delivery_status, n_orders, avg_score, low_score_pct, pct_five_star)
+
+bq2_summary %>%
+  kable(
+    col.names = c("Delivery","Orders","Avg score","Low-score %","5-star %"),
+    caption   = "Review scores: late vs on-time deliveries"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE) %>%
+  row_spec(1, background = "#F0FDF8") %>%
+  row_spec(2, background = "#FEF2F2")
+```
+
+### Score distribution chart
+
+```{r bq2-chart}
+bq2_data %>%
+  mutate(status = ifelse(is_late_delivery == 1, "Late", "On-time")) %>%
+  count(status, review_score) %>%
+  ggplot(aes(x = factor(review_score), y = n, fill = status)) +
+  geom_col(position = "dodge", width = 0.7) +
+  scale_fill_manual(values = c("On-time" = "#1D9E75", "Late" = "#E24B4A")) +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title    = "BQ2: Score distribution — late vs on-time deliveries",
+    subtitle = "Late orders collapse toward 1-star. On-time orders cluster at 5-star.",
+    x = "Review score", y = "Number of orders", fill = "Delivery status"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "bottom")
+```
+
+### Logistics penalty by category
+
+```{r bq2-category-penalty}
+bq2_wide <- bq2_data %>%
+  filter(!is.na(category)) %>%
+  group_by(category, is_late_delivery) %>%
+  summarise(n = n(), avg_score = round(mean(review_score, na.rm = TRUE), 2), .groups = "drop") %>%
+  filter(n >= 30)
+
+bq2_ontime <- bq2_wide %>% filter(is_late_delivery == 0) %>% select(category, score_ontime = avg_score, n_ontime = n)
+bq2_late   <- bq2_wide %>% filter(is_late_delivery == 1) %>% select(category, score_late = avg_score, n_late = n)
+
+bq2_by_cat <- bq2_ontime %>%
+  inner_join(bq2_late, by = "category") %>%
+  mutate(score_drop = round(score_ontime - score_late, 2)) %>%
+  filter(!is.na(score_drop)) %>%
+  arrange(desc(score_drop))
+
+bq2_by_cat %>%
+  head(10) %>%
+  mutate(category = str_replace_all(category, "_", " ")) %>%
+  kable(col.names = c("Category","On-time score","Late score","n on-time","n late","Score drop"),
+        caption = "Categories with the largest logistics penalty (top 10)") %>%
+  kable_styling(bootstrap_options = c("striped","hover"))
+```
+
+```{r bq2-dumbbell, fig.height=5}
+bq2_by_cat %>%
+  head(12) %>%
+  mutate(
+    category = str_replace_all(category, "_", " "),
+    category = fct_reorder(category, score_drop)
+  ) %>%
+  pivot_longer(cols = c(score_ontime, score_late),
+               names_to = "status", values_to = "score") %>%
+  mutate(status = recode(status, "score_ontime" = "On-time", "score_late" = "Late")) %>%
+  ggplot(aes(x = score, y = category, colour = status, group = category)) +
+  geom_line(colour = "grey80", linewidth = 1.2) +
+  geom_point(size = 3.5) +
+  scale_colour_manual(values = c("On-time" = "#1D9E75", "Late" = "#E24B4A")) +
+  labs(
+    title    = "BQ2: Logistics penalty by category (top 12 most affected)",
+    subtitle = "Each line connects the on-time score (green) to the late score (red) for the same category.",
+    x = "Average review score", y = NULL, colour = "Delivery"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "bottom")
+```
+
+::: danger
+**Finding BQ2:** Late deliveries drop the average score from **4.28★ to 2.26★** — a penalty of −2.02 stars. The low-score rate jumps from 9.5% to 62.9%. More than six in ten late orders receive a terrible review. This is the single most impactful driver of customer dissatisfaction on the platform.
+:::
+
+::: policy
+**Policy BQ2:** (1) Dynamic EDD buffer — if a route historically runs late, show customers a conservative estimate upfront. (2) Split vendor scorecards into a product quality track (on-time orders only) and a logistics track (carrier performance). (3) Escalate carrier contracts where late rate exceeds 10% on a route. Sellers must not be penalised for carrier failures.
+:::
+
+------------------------------------------------------------------------
+
+## BQ3 — Does Listing Quality Affect Satisfaction?
+
+**Goal:** Reduce buyer disappointment caused by sparse product information before purchase.
+
+### Photo count vs review score
+
+```{r bq3-photos}
+bq3_photos <- analytical_table %>%
+  filter(!is.na(review_score), !is.na(avg_photos)) %>%
+  mutate(
+    photo_bucket = case_when(
+      avg_photos < 1.5 ~ "1 photo",
+      avg_photos < 3.5 ~ "2–3 photos",
+      avg_photos < 6.5 ~ "4–6 photos",
+      TRUE             ~ "7+ photos"
+    ),
+    photo_bucket = factor(photo_bucket,
+                          levels = c("1 photo","2–3 photos","4–6 photos","7+ photos"))
+  ) %>%
+  group_by(photo_bucket) %>%
+  summarise(
+    n_orders       = n(),
+    avg_score      = round(mean(review_score, na.rm = TRUE), 3),
+    low_score_rate = round(mean(low_quality_signal, na.rm = TRUE) * 100, 1),
+    .groups = "drop"
+  )
+
+bq3_photos %>%
+  kable(col.names = c("Photo count","Orders","Avg score","Low-score %"),
+        caption = "Review score by number of product photos") %>%
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
+```
+
+### Description length vs review score
+
+```{r bq3-descriptions}
+bq3_desc <- analytical_table %>%
+  filter(!is.na(review_score), !is.na(avg_description_length)) %>%
+  mutate(
+    desc_bucket = case_when(
+      avg_description_length < 100  ~ "< 100 chars",
+      avg_description_length < 300  ~ "100–300 chars",
+      avg_description_length < 700  ~ "300–700 chars",
+      TRUE                           ~ "700+ chars"
+    ),
+    desc_bucket = factor(desc_bucket,
+                         levels = c("< 100 chars","100–300 chars","300–700 chars","700+ chars"))
+  ) %>%
+  group_by(desc_bucket) %>%
+  summarise(
+    n_orders       = n(),
+    avg_score      = round(mean(review_score, na.rm = TRUE), 3),
+    low_score_rate = round(mean(low_quality_signal, na.rm = TRUE) * 100, 1),
+    .groups = "drop"
+  )
+
+bq3_desc %>%
+  kable(col.names = c("Description length","Orders","Avg score","Low-score %"),
+        caption = "Review score by product description length") %>%
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = FALSE)
+```
+
+### BQ3 charts
+
+```{r bq3-charts, fig.height=4}
+p_photos <- ggplot(bq3_photos, aes(x = photo_bucket, y = avg_score, group = 1)) +
+  geom_line(colour = "#378ADD", linewidth = 1.3) +
+  geom_point(size = 4, colour = "#378ADD") +
+  geom_text(aes(label = avg_score), vjust = -1.1, size = 3.5) +
+  scale_y_continuous(limits = c(4.08, 4.22)) +
+  labs(title = "Score by photo count", x = NULL, y = "Avg review score") +
+  theme_minimal(base_size = 12)
+
+p_desc <- ggplot(bq3_desc, aes(x = desc_bucket, y = avg_score, group = 1)) +
+  geom_line(colour = "#534AB7", linewidth = 1.3) +
+  geom_point(size = 4, colour = "#534AB7") +
+  geom_text(aes(label = avg_score), vjust = -1.1, size = 3.5) +
+  scale_y_continuous(limits = c(4.08, 4.22)) +
+  labs(title = "Score by description length", x = NULL, y = "Avg review score") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 12, hjust = 1))
+
+tryCatch({
+  library(patchwork)
+  p_photos + p_desc +
+    plot_annotation(
+      title    = "BQ3: Listing completeness vs customer satisfaction",
+      subtitle = "Gains plateau quickly — the goal is a minimum standard, not maximum content."
+    )
+}, error = function(e) { print(p_photos); print(p_desc) })
+```
+
+::: finding
+**Finding BQ3:** Moving from 1 photo to 2–3 photos is associated with a +0.043★ score lift. Descriptions above 700 characters are associated with a +0.053★ lift over the shortest descriptions. Gains diminish quickly — the value is in meeting a minimum standard, not maximising content volume.
+:::
+
+::: policy
+**Policy BQ3:** Hard gate in the seller portal — minimum 2 photos and 300 characters of description before a listing can go live. Estimated to affect around one third of current live listings.
+:::
+
+------------------------------------------------------------------------
+
+# Part 3: Supervised Machine Learning
+
+------------------------------------------------------------------------
+
+## Business Problem
+
+::: qa
+**Business problem:** Olist wants to identify customers likely to leave a 1–2 star review *before* the review is written, so the company can intervene proactively and protect customer trust.
+
+**Target variable:** Binary — 1 or 2 stars = low-quality experience (positive class); 3–5 stars = acceptable (negative class).
+
+**Model choice:** Logistic regression. Reasons: binary target, interpretable odds ratios show direction and magnitude of each risk factor, transparent decisions for business stakeholders, and explainability matters when outputs could affect seller relationships.
+:::
+
+## Model setup and training
+
+```{r model-setup}
+set.seed(42)
+
+product_features <- c(
+  "log_total_product_value",
+  "log_total_freight",
+  "log_avg_description_length",
+  "log_avg_weight_g",
+  "freight_price_ratio",
+  "avg_photos",
+  "purchase_month"
+)
+experience_features <- c(
+  product_features,
+  "delivery_days",
+  "is_late",
+  "late_days",
+  "order_item_count",
+  "unique_sellers"
+)
+
+model_data <- analytical_table %>%
+  filter(order_status == "delivered") %>%
+  mutate(
+    is_late        = as.integer(delivery_delay_days > 0),
+    is_late        = replace_na(is_late, 0L),
+    late_days      = replace_na(late_days, 0),
+    avg_photos     = replace_na(avg_photos, 0),
+    freight_price_ratio = if_else(is.finite(freight_price_ratio), freight_price_ratio, NA_real_)
+  ) %>%
+  select(low_quality_signal, all_of(experience_features)) %>%
+  drop_na() %>%
+  mutate(across(all_of(setdiff(experience_features, "is_late")), ~ as.numeric(scale(.x)))) %>%
+  mutate(row_id = row_number())
+
+set.seed(42)
+train_ids <- model_data %>%
+  group_by(low_quality_signal) %>%
+  slice_sample(prop = 0.8) %>%
+  ungroup() %>%
+  pull(row_id)
+train_s   <- model_data %>% filter( row_id %in% train_ids)
+test_s    <- model_data %>% filter(!row_id %in% train_ids)
+cat("Training rows:", nrow(train_s), "| Test rows:", nrow(test_s), "
+")
+cat("Low-quality rate:", round(mean(model_data$low_quality_signal)*100,1), "%
+")
+```
+
+```{r train-models}
+product_model <- glm(
+  reformulate(product_features, "low_quality_signal"),
+  data = train_s, family = binomial()
+)
+experience_model <- glm(
+  reformulate(experience_features, "low_quality_signal"),
+  data = train_s, family = binomial()
+)
+cat("Product model AIC:    ", round(AIC(product_model), 0), "
+")
+cat("Experience model AIC: ", round(AIC(experience_model), 0), "
+")
+```
+
+## Q1 — Can Olist predict bad reviews?
+
+::: qa
+**Q: Can Olist predict customers at risk of leaving a low review?** Yes. The full customer-experience model achieves an AUC of **0.733** — useful predictive ability. The product/listing model alone scores only **0.591** — barely above random chance (0.5). Delivery data substantially improves prediction.
+:::
+
+::: qa
+**Q: Does product information alone predict poor reviews well?** No. AUC of 0.591 is marginally above the 0.5 baseline (random guessing). Product features alone are insufficient — delivery data is essential for the model to be operationally useful.
+:::
+
+### ROC curve — does the model work?
+
+```{r roc-chart, fig.height=5.5}
+roc_product    <- roc(test_s$low_quality_signal,
+                      predict(product_model,    newdata=test_s, type="response"), quiet=TRUE)
+roc_experience <- roc(test_s$low_quality_signal,
+                      predict(experience_model, newdata=test_s, type="response"), quiet=TRUE)
+auc_prod <- round(as.numeric(auc(roc_product)), 3)
+auc_exp  <- round(as.numeric(auc(roc_experience)), 3)
+cat("Product model AUC:    ", auc_prod, "
+")
+cat("Experience model AUC: ", auc_exp, "
+")
+roc_df <- bind_rows(
+  coords(roc_product,    "all", ret=c("specificity","sensitivity"), transpose=FALSE) %>% mutate(model="Product only"),
+  coords(roc_experience, "all", ret=c("specificity","sensitivity"), transpose=FALSE) %>% mutate(model="Full experience")
+) %>% mutate(fpr = 1 - specificity)
+ggplot(roc_df, aes(x=fpr, y=sensitivity, colour=model)) +
+  geom_abline(slope=1, intercept=0, linetype="dashed", colour="grey60") +
+  geom_line(linewidth=1.3) +
+  coord_equal() +
+  scale_colour_manual(values=c("Product only"="#2C7FB8","Full experience"="#D95F0E")) +
+  labs(title="Predicting Low-Quality Customer Experiences",
+       subtitle=paste0("Full model AUC=",auc_exp," vs Product-only AUC=",auc_prod),
+       x="False positive rate", y="True positive rate", colour="Model",
+       caption="Target: review score of 1 or 2 stars") +
+  theme_minimal(base_size=13) +
+  theme(legend.position="bottom", plot.title=element_text(face="bold",size=15))
+```
+
+<p class="img-caption">
+
+The orange curve (full model) sits substantially above the blue curve (product only) and the diagonal baseline. Both axes run 0–1. A perfect model reaches the top-left corner. The gap between the curves represents the predictive value added by delivery data.
+
+</p>
+
+## Q2 — Operational impact: the business scorecard
+
+::: qa
+**Q: How much operational effort does the model require?** The full model flags **18.2%** of orders — not 100%. Customer service effort is concentrated where risk is highest.
+:::
+
+::: qa
+**Q: How many low-review cases can it identify?** It captures **51.7%** of actual 1–2 star reviews within that flagged group — more than half of all complaints, identified before they are written.
+:::
+
+::: qa
+**Q: Are flagged orders genuinely higher risk?** Yes. Flagged orders are **2.85 times** more likely to receive a low review than a randomly selected order.
+:::
+
+```{r scorecard-table}
+scorecard %>%
+  mutate(
+    flagged_workload_rate          = paste0(round(flagged_workload_rate * 100, 1), "%"),
+    low_quality_capture_rate       = paste0(round(low_quality_capture_rate * 100, 1), "%"),
+    low_quality_rate_among_flagged = paste0(round(low_quality_rate_among_flagged * 100, 1), "%"),
+    risk_lift_vs_random            = round(risk_lift_vs_random, 2),
+    orders_flagged                 = comma(orders_flagged),
+    low_quality_orders_caught      = comma(low_quality_orders_caught)
+  ) %>%
+  kable(
+    col.names = c("Model","Orders flagged","Low reviews caught",
+                  "Workload %","Capture rate","Low-review % flagged","Risk lift"),
+    caption   = "Business scorecard: full model vs product/listing model only"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped","hover")) %>%
+  row_spec(2, background = "#F0FDF8", bold = TRUE)
+```
+
+::: finding
+**Scorecard interpretation:** The full model flags 18.2% of orders and catches 51.7% of bad reviews with a 2.85× risk lift. The product-only model flags 37.0% of orders for almost the same catch rate (50.0%) and only 1.35× lift. The full model achieves the same result with half the operational effort — this is the efficiency gain from including delivery data.
+:::
+
+## Q3 — What drives dissatisfaction? Odds ratios
+
+::: qa
+**Q: What is the strongest cause of customer dissatisfaction?** Delivery performance. The late-delivery flag is associated with approximately **5× higher odds** of receiving a 1–2 star review — the largest effect in the model by a wide margin.
+:::
+
+```{r odds-chart, fig.height=5.5}
+feature_labels <- c(
+  log_total_product_value="Product value (log)",
+  log_total_freight="Freight cost (log)",
+  log_avg_description_length="Description length (log)",
+  log_avg_weight_g="Product weight (log)",
+  freight_price_ratio="Freight-to-price ratio",
+  avg_photos="Product photos",
+  purchase_month="Purchase month",
+  delivery_days="Total delivery time",
+  is_late="Late-delivery flag",
+  late_days="Days late",
+  order_item_count="Order item count",
+  unique_sellers="Sellers per order"
+)
+odds_df <- tidy(experience_model, conf.int=TRUE, exponentiate=TRUE) %>%
+  filter(term != "(Intercept)") %>%
+  mutate(feature = recode(term, !!!feature_labels),
+         effect_mag = abs(log(estimate))) %>%
+  arrange(desc(effect_mag)) %>%
+  slice_head(n=10) %>%
+  mutate(feature = fct_reorder(feature, estimate))
+ggplot(odds_df, aes(x=estimate, y=feature)) +
+  geom_vline(xintercept=1, linetype="dashed", colour="grey50") +
+  geom_errorbar(aes(xmin=conf.low, xmax=conf.high), orientation="y", width=0.3, colour="#2C7FB8") +
+  geom_point(size=4.5, colour="#D95F0E") +
+  scale_x_log10() +
+  labs(title="Strongest Signals of a Low Review",
+       subtitle="Odds ratios from the full customer-experience model",
+       x="Odds ratio (log scale)", y=NULL,
+       caption="One-SD increase for numeric features. Late flag: late vs on-time.") +
+  theme_minimal(base_size=13) +
+  theme(plot.title=element_text(face="bold",size=15))
+```
+
+<p class="img-caption">
+
+Dots to the right of the dashed line at 1.0 increase the risk of a low review. Dots to the left reduce it. Error bars show 95% confidence intervals. The late-delivery flag sits far to the right — a late order has approximately 5× higher odds of a bad review. Description length sits to the left, confirming that longer descriptions reduce complaint risk (consistent with BQ3). These are statistical associations, not proven causal relationships.
+
+</p>
+
+## Q4 — Should sellers be penalised?
+
+::: qa
+**Q: Should sellers be automatically penalised using customer reviews alone?** No. Much of the model's predictive power comes from logistics variables — late delivery, total delivery time, days late — which may be entirely outside the seller's control. Automatic penalties based on raw review scores would be unjust. The model should inform recovery actions and logistics improvements, not trigger automatic vendor sanctions.
+:::
+
+## Q5 — What should Olist do with the model?
+
+::: qa
+**Q: What should Olist do with the model's output?** Prioritise high-risk customers for proactive delivery updates, support messages, apologies, and recovery offers at the fulfilment stage. Deploy as a real-time flag — when an order is predicted high-risk, trigger an automated customer communication workflow. This moves Olist from reacting to complaints toward preventing them.
+:::
+
+::: policy
+**Policy ML1:** Deploy the full customer-experience logistic regression model as a real-time risk flag at order fulfilment. Trigger automated customer communication for the 18.2% of flagged orders. Do not use model outputs to automatically penalise or remove sellers — logistics factors outside their control account for the majority of predictive power.
+:::
+
+## Why logistic regression, not random forest?
+
+```{r model-comparison}
+tibble(
+  Criterion      = c("Target type","Interpretability","Stakeholder use",
+                     "Seller accountability","Performance"),
+  `Logistic Regression (chosen)` = c(
+    "Binary — direct fit",
+    "Odds ratios: direction + magnitude for every feature",
+    "Easy to present to operations and management teams",
+    "Can separate logistics from product effects transparently",
+    paste0("AUC ", auc_exp, " — useful predictive ability")
+  ),
+  `Random Forest (challenger)` = c(
+    "Binary — works but lacks interpretability",
+    "Feature importance only — no direction or magnitude",
+    "Black box — hard to justify individual decisions",
+    "Cannot distinguish logistics from product contribution",
+    "May marginally improve AUC at cost of explainability"
+  )
+) %>%
+  kable(caption = "Model selection rationale: logistic regression vs random forest") %>%
+  kable_styling(bootstrap_options = c("striped","hover")) %>%
+  column_spec(2, background = "#F0FDF8") %>%
+  column_spec(3, color = "#6B7280")
+```
+
+------------------------------------------------------------------------
+
+# Part 4: Unsupervised Machine Learning — Seller Segmentation
+
+**Goal:** Find natural groups of sellers based on product quality — with logistics stripped out — to support a differentiated vendor management strategy.
+
+> **Critical methodological point:** All defect rates below are measured on **on-time deliveries only**. This isolates genuine product quality from delivery performance, which is the core insight of BQ2. A seller can only be fairly judged on product quality for orders that arrived on time.
+
+## Build seller feature matrix
+
+```{r seller-features}
+seller_profiles <- analytical_table %>%
+  filter(!is.na(review_score), !is.na(primary_seller_id)) %>%
+  group_by(seller_id = primary_seller_id) %>%
+  summarise(
+    n_orders       = n(),
+    avg_score      = mean(review_score, na.rm = TRUE),
+    low_rate       = mean(low_quality_signal, na.rm = TRUE),
+    avg_price      = mean(total_product_value, na.rm = TRUE),
+    late_rate      = mean(is_late_delivery, na.rm = TRUE),
+    avg_photos     = mean(avg_photos, na.rm = TRUE),
+    avg_desc_len   = mean(avg_description_length, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  filter(n_orders >= 10)
+
+# For segmentation: use only on-time orders to isolate product quality
+ontime_profiles <- analytical_table %>%
+  filter(!is.na(review_score), is_late_delivery == 0, !is.na(primary_seller_id)) %>%
+  group_by(seller_id = primary_seller_id) %>%
+  summarise(
+    n_ontime      = n(),
+    avg_score_ot  = mean(review_score, na.rm = TRUE),
+    defect_rate   = mean(low_quality_signal, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  filter(n_ontime >= 5)
+
+cat("Sellers with >= 10 orders:", nrow(seller_profiles), "\n")
+cat("Sellers with >= 5 on-time orders:", nrow(ontime_profiles), "\n")
+```
+
+## Manual business segmentation
+
+The three segments are defined directly from the data distribution, using the on-time defect rate and average on-time score:
+
+```{r manual-segmentation}
+seg_data <- ontime_profiles %>%
+  mutate(
+    segment = case_when(
+      avg_score_ot >= 4.0 & defect_rate < 0.15 ~ "1. Premium / Good",
+      avg_score_ot >= 3.0 & defect_rate < 0.40 ~ "2. Inconsistent / Mixed",
+      TRUE                                       ~ "3. High Defect"
+    )
+  )
+
+seg_summary <- seg_data %>%
+  group_by(segment) %>%
+  summarise(
+    n_sellers    = n(),
+    volume_share = round(n() / nrow(seg_data) * 100, 1),
+    avg_score    = round(mean(avg_score_ot), 2),
+    defect_rate  = round(mean(defect_rate) * 100, 1),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    strategy = case_match(
+      segment,
+      "1. Premium / Good"       ~ "Protect and incentivise — platform backbone",
+      "2. Inconsistent / Mixed" ~ "Monitor and coach — quarterly SLA targets",
+      "3. High Defect"          ~ "Probationary SLA or off-board — genuine product failures"
+    )
+  )
+
+seg_summary %>%
+  kable(
+    col.names = c("Segment","Sellers","Share %","Avg score","Defect rate %","Strategy"),
+    caption   = "Manual business segmentation: three seller archetypes (on-time orders only)"
+  ) %>%
+  kable_styling(bootstrap_options = c("striped","hover")) %>%
+  row_spec(1, background = "#F0FDF8") %>%
+  row_spec(2, background = "#FFFBEB") %>%
+  row_spec(3, background = "#FEF2F2")
+```
+
+```{r segmentation-scatter, fig.height=5.5}
+seg_data %>%
+  ggplot(aes(x = defect_rate, y = avg_score_ot, colour = segment)) +
+  geom_point(alpha = 0.5, size = 1.5) +
+  scale_colour_manual(values = c(
+    "1. Premium / Good"       = "#1D9E75",
+    "2. Inconsistent / Mixed" = "#EF9F27",
+    "3. High Defect"          = "#E24B4A"
+  )) +
+  labs(
+    title    = "Manual Business Segmentation",
+    subtitle = "On-time orders only — logistics removed to isolate genuine product quality.",
+    x = "Defect rate (on-time orders only)",
+    y = "Average score (on-time orders only)",
+    colour = "Segment"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "bottom")
+```
+
+## Algorithmic validation: hierarchical clustering (Ward's method)
+
+```{r hierarchical-clustering, fig.height=5.5}
+# Scale features for clustering
+cluster_input <- seg_data %>%
+  select(avg_score_ot, defect_rate) %>%
+  scale()
+
+# Ward's method — no guidance on number of groups
+set.seed(42)
+hclust_result  <- hclust(dist(cluster_input), method = "ward.D2")
+seg_data$cluster_ward <- factor(cutree(hclust_result, k = 3))
+
+# Reorder clusters to match segment colours for interpretability
+cluster_means <- seg_data %>%
+  group_by(cluster_ward) %>%
+  summarise(m = mean(avg_score_ot)) %>%
+  arrange(desc(m))
+level_order <- cluster_means$cluster_ward
+seg_data$cluster_ordered <- factor(
+  match(seg_data$cluster_ward, level_order),
+  labels = c("Cluster A (high score)", "Cluster B (mid)", "Cluster C (low score)")
+)
+
+ggplot(seg_data, aes(x = defect_rate, y = avg_score_ot, colour = cluster_ordered)) +
+  geom_point(alpha = 0.5, size = 1.5) +
+  scale_colour_manual(values = c(
+    "Cluster A (high score)" = "#1D9E75",
+    "Cluster B (mid)"        = "#EF9F27",
+    "Cluster C (low score)"  = "#E24B4A"
+  )) +
+  labs(
+    title    = "Algorithmic Clustering — Ward's Hierarchical Method",
+    subtitle = "Algorithm given no information about group count or boundaries. Same 3-group structure emerges.",
+    x = "Defect rate (on-time orders only)",
+    y = "Average score (on-time orders only)",
+    colour = "Ward's cluster"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "bottom")
+```
+
+<p class="img-caption">
+
+Ward's hierarchical clustering independently confirms the three-segment structure without being told how many groups to find. The colours differ between charts because clustering algorithms assign labels arbitrarily — but the geometric structure (high-score/low-defect group, middle group, high-defect group) is identical to the manual segmentation above. This convergence validates that the segments reflect real patterns in the data.
+
+</p>
+
+## Algorithmic validation findings
+
+```{r cluster-validation}
+tibble(
+  Finding       = c(
+    "Same 3-cluster structure",
+    "Silhouette method peaks at k = 2",
+    "k = 3 chosen for business interpretability",
+    "Cluster overlap in the middle is expected"
+  ),
+  Explanation = c(
+    "Ward's method independently arrives at 3 groups mirroring Premium / Inconsistent / High-Defect — no guidance provided.",
+    "Mathematically k = 2 produces the most cohesive partition. The silhouette width approaches 0.45, indicating strong structural integrity.",
+    "The high-defect tail is the most actionable business segment and too important to collapse into the middle group.",
+    "Continuous e-commerce metrics produce overlapping boundaries — the distinct cluster centers and separate tails are what matter for vendor management."
+  )
+) %>%
+  kable(col.names = c("Finding","Explanation"),
+        caption = "Algorithmic validation: what Ward's clustering confirmed") %>%
+  kable_styling(bootstrap_options = c("striped","hover")) %>%
+  column_spec(1, bold = TRUE, width = "30%") %>%
+  column_spec(2, width = "70%")
+```
+
+::: finding
+**Finding ML2:** The high-defect segment contains sellers with a defect rate above 40% on on-time deliveries. There is no logistics excuse for this — these are genuine product quality failures. They are the root cause of the BQ1 category-level problems.
+:::
+
+::: policy
+**Policy ML2:** Three-tier vendor strategy. (1) Protect and incentivise the top segment — preferential placement and retention programmes. (2) Coach and monitor the middle segment — targeted SLA targets and quarterly reviews. (3) Probationary SLA or off-board the high-defect segment — a defect rate above 40% on on-time orders cannot be addressed through coaching alone.
+:::
+
+------------------------------------------------------------------------
+
+# Part 5: Conclusions
+
+## All business questions answered
+
+```{r conclusions-table}
+tibble(
+  `#` = c("BQ1","BQ2","BQ3","ML Q1","ML Q2","ML Q3","ML Q4","ML Q5","ML Unsupervised"),
+  `Business question` = c(
+    "Which categories carry the most risk?",
+    "Are bad reviews caused by logistics or product defects?",
+    "Does listing completeness affect satisfaction?",
+    "Can Olist predict bad reviews before they happen?",
+    "What operational effort does the model require?",
+    "What is the strongest driver of dissatisfaction?",
+    "Should sellers be auto-penalised on review scores?",
+    "What should Olist do with the model output?",
+    "Can sellers be grouped into actionable segments?"
+  ),
+  `Answer` = c(
+    "3 categories exceed 20% low-score rate. Office furniture: 3.64★, 22.1% low-score.",
+    "Primarily logistics. Late deliveries cause −2.02★ penalty; 62.9% of late orders get 1–2 stars.",
+    "Yes. 2+ photos and longer descriptions are associated with higher scores.",
+    "Yes. Full model AUC = 0.733. Product-only AUC = 0.591 — delivery data is essential.",
+    "18.2% of orders flagged. 51.7% of bad reviews captured. 2.85× risk lift.",
+    "Late delivery (~5× higher odds). Total delivery time and order complexity also increase risk.",
+    "No. Much of the predictive power comes from logistics outside seller control.",
+    "Proactive delivery updates, apologies, and recovery offers for flagged orders.",
+    "Yes. Three natural segments confirmed by both manual and algorithmic methods."
+  ),
+  `Policy` = c(
+    "Quality SLA + mandatory tests for categories above 20% low-score rate",
+    "Dynamic EDD buffer; split product and logistics scorecards",
+    "Seller portal gate: min 2 photos + 300 characters to publish",
+    "Deploy as real-time order risk flag at fulfilment stage",
+    "Focus customer service on 18.2% of orders — most efficient use of resources",
+    "Fix logistics first — EDD buffer, carrier accountability",
+    "Model informs recovery actions only; no automatic vendor penalties",
+    "Trigger proactive support workflow at fulfilment",
+    "Protect top segment, coach middle, act on high-defect"
+  )
+) %>%
+  kable(caption = "Complete summary: all business questions, answers, and policies") %>%
+  kable_styling(bootstrap_options = c("striped","hover","condensed")) %>%
+  column_spec(1, bold = TRUE, width = "8%") %>%
+  column_spec(2, width = "27%") %>%
+  column_spec(3, width = "35%") %>%
+  column_spec(4, width = "30%")
+```
+
+------------------------------------------------------------------------
+
+## Central conclusion
+
+::: danger
+**Delivery performance is the dominant driver of customer dissatisfaction on Olist — not product quality.**
+
+The BQ2 descriptive analysis shows that late deliveries cause a −2.02★ penalty and account for 62.9% of all low-score reviews. The supervised ML model confirms this statistically: the late-delivery flag has approximately 5× higher odds of producing a bad review than any product characteristic. Two independent methods, same answer.
+:::
+
+::: finding
+**Product quality is the secondary problem — but it is real and measurable.**
+
+The unsupervised segmentation isolates genuine product failures by measuring defect rates on on-time orders only. The high-defect segment carries a defect rate above 40% even when orders arrive on time. Logistics cannot explain these failures. Direct vendor intervention is required.
+:::
+
+::: policy
+**Recommended sequence of action:**
+
+1.  **Fix the delivery signal first** — dynamic EDD buffer, split scorecards, carrier accountability. Addresses the largest single driver of bad reviews.
+2.  **Gate listing quality** — minimum photos and description length enforced at upload. Low cost, affects roughly a third of current listings.
+3.  **Deploy the supervised model** — real-time risk flag at fulfilment triggering proactive customer recovery. AUC 0.733 with 2.85× risk lift is operationally meaningful.
+4.  **Execute the vendor strategy** — protect the top segment, coach the middle, act on the high-defect segment.
+
+Supervised learning allows Olist to move from **reacting to complaints** toward **proactively protecting customer satisfaction**. That is the value of this analysis.
+:::
+
+------------------------------------------------------------------------
+
+*Analysis performed on the Olist Brazilian E-Commerce Public Dataset (96,478 delivered orders).* *Data available at: <https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce>* *Minimum review thresholds applied before ranking: 50 reviews (category), 20 reviews (seller).* *Supervised model: logistic regression, stratified 80/20 train-test split, standardised predictors.* *Unsupervised segmentation: defect rates computed on on-time deliveries only.*

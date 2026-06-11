@@ -1,0 +1,3 @@
+model,orders_flagged,low_quality_orders_caught,flagged_workload_rate,low_quality_capture_rate,low_quality_rate_among_flagged,risk_lift_vs_random
+Product/listing risk,7045,1248,0.3702438511667017,0.5002004008016032,0.17714691270404542,1.3510025871473252
+Full customer experience,3459,1291,0.18178473828042885,0.5174348697394789,0.37322925701069676,2.8464153516631416
