@@ -39,4 +39,6 @@ install.packages(c(
 
 ## Validation
 
-The full report has been rendered successfully to `Olist_Analysis_Final.html`. The Rmd also includes a file-existence check so missing CSVs fail with a clear message before the analysis starts.
+The full report has been rendered successfully to `Olist_Analysis_Final.html`. The Rmd also includes a file-existence check so missing CSVs fail with a clear message before the analysis starts. 
+
+🔗 **Live report:** https://gaurigupta23.github.io/olist-customer-experience-prediction/Olist_Analysis_Final.html
